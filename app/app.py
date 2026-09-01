@@ -59,7 +59,7 @@ if "state" not in st.session_state:
 
 
 # ============================================================
-# DYNAMIC WORLDWIDE LOCATION SEARCH
+# WORLDWIDE LOCATION SEARCH
 # ============================================================
 
 def search_place(place):
@@ -69,102 +69,167 @@ def search_place(place):
     if not place:
         return None
 
-    # ========================================================
-    # 1. OPEN-METEO DIRECT SEARCH
-    # ========================================================
+    # --------------------------------------------------------
+    # OPEN-METEO SEARCH
+    # --------------------------------------------------------
 
-    url = "https://geocoding-api.open-meteo.com/v1/search"
+    open_meteo_url = (
+        "https://geocoding-api.open-meteo.com/v1/search"
+    )
 
-    params = {
-        "name": place,
-        "count": 100,
-        "language": "en",
-        "format": "json"
-    }
+    def open_meteo_search(
+        search_text,
+        country_code=None
+    ):
 
-    try:
+        params = {
+            "name": search_text,
+            "count": 100,
+            "language": "en",
+            "format": "json"
+        }
 
-        response = requests.get(
-            url,
-            params=params,
-            timeout=15
+        if country_code:
+            params["countryCode"] = country_code
+
+        try:
+
+            response = requests.get(
+                open_meteo_url,
+                params=params,
+                timeout=15
+            )
+
+            response.raise_for_status()
+
+            return response.json().get(
+                "results",
+                []
+            )
+
+        except Exception:
+
+            return []
+
+    # --------------------------------------------------------
+    # NORMAL WORLDWIDE SEARCH
+    # --------------------------------------------------------
+
+    results = open_meteo_search(place)
+
+    if results:
+
+        query = " ".join(
+            place.lower().split()
         )
 
-        response.raise_for_status()
+        # Exact name
+        for item in results:
 
-        data_result = response.json()
+            name = str(
+                item.get("name", "")
+            ).lower().strip()
 
-        results = data_result.get(
-            "results",
-            []
+            if name == query:
+                return item
+
+        # Exact state / province / region
+        for item in results:
+
+            admin1 = str(
+                item.get("admin1", "")
+            ).lower().strip()
+
+            if admin1 == query:
+                return item
+
+        # Exact second-level administrative region
+        for item in results:
+
+            admin2 = str(
+                item.get("admin2", "")
+            ).lower().strip()
+
+            if admin2 == query:
+                return item
+
+        # Prefer administrative regions
+        for item in results:
+
+            feature = str(
+                item.get(
+                    "feature_code",
+                    ""
+                )
+            ).upper()
+
+            if feature in [
+                "ADM1",
+                "ADM2"
+            ]:
+                return item
+
+        return results[0]
+
+    # --------------------------------------------------------
+    # INDIA RETRY
+    # --------------------------------------------------------
+    # This is dynamic.
+    # No state/place list is hard-coded.
+    # --------------------------------------------------------
+
+    results = open_meteo_search(
+        f"{place}, India",
+        "IN"
+    )
+
+    if results:
+
+        query = " ".join(
+            place.lower().split()
         )
 
-        if results:
+        for item in results:
 
-            query = place.lower().strip()
+            name = str(
+                item.get("name", "")
+            ).lower().strip()
 
-            # Exact name match
-            for item in results:
+            admin1 = str(
+                item.get("admin1", "")
+            ).lower().strip()
 
-                name = str(
-                    item.get("name", "")
-                ).lower().strip()
+            admin2 = str(
+                item.get("admin2", "")
+            ).lower().strip()
 
-                if name == query:
+            if (
+                name == query
+                or admin1 == query
+                or admin2 == query
+            ):
+                return item
 
-                    return item
+        for item in results:
 
-            # Exact admin1 match
-            for item in results:
+            feature = str(
+                item.get(
+                    "feature_code",
+                    ""
+                )
+            ).upper()
 
-                admin1 = str(
-                    item.get("admin1", "")
-                ).lower().strip()
+            if feature in [
+                "ADM1",
+                "ADM2"
+            ]:
+                return item
 
-                if admin1 == query:
+        return results[0]
 
-                    return item
-
-            # Exact admin2 match
-            for item in results:
-
-                admin2 = str(
-                    item.get("admin2", "")
-                ).lower().strip()
-
-                if admin2 == query:
-
-                    return item
-
-            # Prefer administrative result
-            for item in results:
-
-                feature = str(
-                    item.get(
-                        "feature_code",
-                        ""
-                    )
-                ).upper()
-
-                if feature in [
-                    "ADM1",
-                    "ADM2"
-                ]:
-
-                    return item
-
-            return results[0]
-
-    except Exception:
-        pass
-
-
-    # ========================================================
-    # 2. NOMINATIM FALLBACK
-    # ========================================================
-    # This handles locations that Open-Meteo does not return.
-    # No places are hard-coded.
-    # ========================================================
+    # --------------------------------------------------------
+    # NOMINATIM / OPENSTREETMAP FALLBACK
+    # --------------------------------------------------------
 
     nominatim_url = (
         "https://nominatim.openstreetmap.org/search"
@@ -195,230 +260,87 @@ def search_place(place):
 
         results = response.json()
 
-        if not results:
-            return None
+        if results:
 
-        best = results[0]
+            # Try to find exact display/name match first
+            query = place.lower().strip()
 
-        address = best.get(
-            "address",
-            {}
-        )
+            for result in results:
 
-        return {
-            "name": (
-                address.get(
-                    "state"
-                )
-                or address.get(
-                    "city"
-                )
-                or address.get(
-                    "town"
-                )
-                or address.get(
-                    "village"
-                )
-                or place
-            ),
+                display_name = str(
+                    result.get(
+                        "display_name",
+                        ""
+                    )
+                ).lower()
 
-            "latitude": float(
-                best["lat"]
-            ),
+                if query in display_name:
 
-            "longitude": float(
-                best["lon"]
-            ),
-
-            "country": address.get(
-                "country",
-                ""
-            ),
-
-            "admin1": address.get(
-                "state",
-                ""
-            ),
-
-            "country_code": address.get(
-                "country_code",
-                ""
-            ).upper()
-        }
-
-    except Exception:
-        return None
-    # --------------------------------------------------------
-    # CHECK IF USER EXPLICITLY GAVE A COUNTRY
-    # Example:
-    # Gujarat, India
-    # Paris, France
-    # --------------------------------------------------------
-
-    query_parts = [
-        part.strip()
-        for part in query.split(",")
-        if part.strip()
-    ]
-
-    requested_country = ""
-
-    if len(query_parts) >= 2:
-        requested_country = query_parts[-1]
-
-    scored_results = []
-
-    for item in results:
-
-        name = str(
-            item.get("name", "")
-        ).strip().lower()
-
-        country = str(
-            item.get("country", "")
-        ).strip().lower()
-
-        country_code = str(
-            item.get("country_code", "")
-        ).strip().lower()
-
-        admin1 = str(
-            item.get("admin1", "")
-        ).strip().lower()
-
-        admin2 = str(
-            item.get("admin2", "")
-        ).strip().lower()
-
-        feature_code = str(
-            item.get("feature_code", "")
-        ).strip().upper()
-
-        population = item.get(
-            "population",
-            0
-        )
-
-        if population is None:
-            population = 0
-
-        try:
-            population = float(population)
-        except:
-            population = 0
-
-        score = 0
-
-        # ----------------------------------------------------
-        # CREATE SEARCHABLE TEXT
-        # ----------------------------------------------------
-
-        searchable_text = " ".join(
-            [
-                name,
-                admin1,
-                admin2,
-                country
-            ]
-        )
-
-        # ----------------------------------------------------
-        # EXACT NAME MATCH
-        # ----------------------------------------------------
-
-        if query == name:
-            score += 1000
-
-        # ----------------------------------------------------
-        # EXACT ADMINISTRATIVE REGION MATCH
-        # This helps for states such as
-        # Himachal Pradesh / Uttar Pradesh
-        # without hard-coding their names.
-        # ----------------------------------------------------
-
-        if query == admin1:
-            score += 1200
-
-        if query == admin2:
-            score += 1100
-
-        # ----------------------------------------------------
-        # QUERY FOUND IN LOCATION INFORMATION
-        # ----------------------------------------------------
-
-        if query in searchable_text:
-            score += 300
-
-        # ----------------------------------------------------
-        # ADMINISTRATIVE REGION
-        # Prefer state/province/region results when the
-        # user's query matches an administrative area.
-        # ----------------------------------------------------
-
-        if feature_code == "ADM1":
-            score += 500
-
-        elif feature_code == "ADM2":
-            score += 350
-
-        elif feature_code == "ADM3":
-            score += 200
-
-        # ----------------------------------------------------
-        # EXPLICIT COUNTRY MATCH
-        # ----------------------------------------------------
-
-        if requested_country:
-
-            if (
-                requested_country == country
-                or requested_country == country_code
-            ):
-                score += 1500
+                    best = result
+                    break
 
             else:
-                score -= 1000
 
-        # ----------------------------------------------------
-        # POPULATION AS A TIE BREAKER
-        # ----------------------------------------------------
+                best = results[0]
 
-        if population > 0:
-
-            score += min(
-                math.log10(population + 1) * 20,
-                200
+            address = best.get(
+                "address",
+                {}
             )
 
-        scored_results.append(
-            (
-                score,
-                item
-            )
-        )
+            return {
+                "name": (
+                    address.get("state")
+                    or address.get("city")
+                    or address.get("town")
+                    or address.get("village")
+                    or address.get("county")
+                    or place
+                ),
 
-    # --------------------------------------------------------
-    # SORT BEST MATCH FIRST
-    # --------------------------------------------------------
+                "latitude": float(
+                    best["lat"]
+                ),
 
-    scored_results.sort(
-        key=lambda x: x[0],
-        reverse=True
-    )
+                "longitude": float(
+                    best["lon"]
+                ),
 
-    if not scored_results:
-        return None
+                "country": address.get(
+                    "country",
+                    ""
+                ),
 
-    return scored_results[0][1]
+                "admin1": address.get(
+                    "state",
+                    ""
+                ),
+
+                "country_code": address.get(
+                    "country_code",
+                    ""
+                ).upper()
+            }
+
+    except Exception:
+
+        pass
+
+    return None
 
 
 # ============================================================
 # ENVIRONMENTAL DATA
 # ============================================================
 
-def get_environmental_data(latitude, longitude):
+def get_environmental_data(
+    latitude,
+    longitude
+):
 
-    url = "https://api.open-meteo.com/v1/forecast"
+    url = (
+        "https://api.open-meteo.com/v1/forecast"
+    )
 
     params = {
         "latitude": latitude,
@@ -521,9 +443,14 @@ def get_environmental_data(latitude, longitude):
 # ELEVATION
 # ============================================================
 
-def get_elevation(latitude, longitude):
+def get_elevation(
+    latitude,
+    longitude
+):
 
-    url = "https://api.open-meteo.com/v1/elevation"
+    url = (
+        "https://api.open-meteo.com/v1/elevation"
+    )
 
     params = {
         "latitude": latitude,
@@ -554,7 +481,10 @@ def get_elevation(latitude, longitude):
 # SLOPE
 # ============================================================
 
-def calculate_slope(latitude, longitude):
+def calculate_slope(
+    latitude,
+    longitude
+):
 
     offset = 0.002
 
@@ -679,59 +609,63 @@ if search_clicked:
 
     else:
 
-        try:
+        with st.spinner(
+            "🔎 Finding location..."
+        ):
 
-            result = search_place(
-                place.strip()
-            )
+            try:
 
-            if result is None:
+                result = search_place(
+                    place.strip()
+                )
+
+                if result is None:
+
+                    st.error(
+                        "❌ Location not found. "
+                        "Try another place."
+                    )
+
+                else:
+
+                    st.session_state.latitude = float(
+                        result["latitude"]
+                    )
+
+                    st.session_state.longitude = float(
+                        result["longitude"]
+                    )
+
+                    st.session_state.location_name = (
+                        result.get(
+                            "name",
+                            place
+                        )
+                    )
+
+                    st.session_state.country = (
+                        result.get(
+                            "country",
+                            ""
+                        )
+                    )
+
+                    st.session_state.state = (
+                        result.get(
+                            "admin1",
+                            ""
+                        )
+                    )
+
+                    st.success(
+                        "✅ Location selected successfully."
+                    )
+
+            except Exception as e:
 
                 st.error(
-                    "❌ Location not found. "
-                    "Try another place."
+                    f"❌ Location search error: {e}"
                 )
-
-            else:
-
-                st.session_state.latitude = float(
-                    result["latitude"]
-                )
-
-                st.session_state.longitude = float(
-                    result["longitude"]
-                )
-
-                st.session_state.location_name = (
-                    result.get(
-                        "name",
-                        place
-                    )
-                )
-
-                st.session_state.country = (
-                    result.get(
-                        "country",
-                        ""
-                    )
-                )
-
-                st.session_state.state = (
-                    result.get(
-                        "admin1",
-                        ""
-                    )
-                )
-
-                st.success(
-                    "✅ Location selected successfully."
-                )
-
-        except Exception as e:
-
-            st.error(
-                f"❌ Location search error: {e}"
-            )
 
 
 # ============================================================
@@ -741,9 +675,17 @@ if search_clicked:
 latitude = st.session_state.latitude
 longitude = st.session_state.longitude
 
-location_name = st.session_state.location_name
-country = st.session_state.country
-state = st.session_state.state
+location_name = (
+    st.session_state.location_name
+)
+
+country = (
+    st.session_state.country
+)
+
+state = (
+    st.session_state.state
+)
 
 
 if state:
@@ -778,13 +720,17 @@ try:
         longitude
     )
 
-    rainfall = environment["rainfall"]
+    rainfall = environment[
+        "rainfall"
+    ]
 
     soil_moisture = environment[
         "soil_moisture"
     ]
 
-    humidity = environment["humidity"]
+    humidity = environment[
+        "humidity"
+    ]
 
     temperature = environment[
         "temperature"
@@ -968,9 +914,9 @@ if analyze_clicked:
             "Temperature_C"
         ] = temperature
 
-    # --------------------------------------------------------
+    # ========================================================
     # AI PREDICTION
-    # --------------------------------------------------------
+    # ========================================================
 
     try:
 
@@ -997,9 +943,9 @@ if analyze_clicked:
         min(100.0, probability)
     )
 
-    # --------------------------------------------------------
+    # ========================================================
     # RISK LEVEL
-    # --------------------------------------------------------
+    # ========================================================
 
     if probability < 30:
 
@@ -1037,9 +983,9 @@ if analyze_clicked:
             f"{probability:.1f}%"
         )
 
-    # --------------------------------------------------------
+    # ========================================================
     # RISK METRICS
-    # --------------------------------------------------------
+    # ========================================================
 
     col1, col2, col3 = st.columns(3)
 
@@ -1064,9 +1010,9 @@ if analyze_clicked:
             f"{rainfall:.1f} mm"
         )
 
-    # --------------------------------------------------------
+    # ========================================================
     # AI ASSESSMENT
-    # --------------------------------------------------------
+    # ========================================================
 
     st.subheader(
         "🤖 AI Assessment"
@@ -1087,9 +1033,9 @@ if analyze_clicked:
             "under the current environmental conditions."
         )
 
-    # --------------------------------------------------------
+    # ========================================================
     # RISK EXPLANATION
-    # --------------------------------------------------------
+    # ========================================================
 
     st.subheader(
         f"🧠 Why is the Risk {risk_level}?"
@@ -1147,9 +1093,9 @@ if analyze_clicked:
             "warning threshold."
         )
 
-    # --------------------------------------------------------
+    # ========================================================
     # EARLY WARNING
-    # --------------------------------------------------------
+    # ========================================================
 
     if risk_level in [
         "HIGH",
@@ -1176,9 +1122,9 @@ if analyze_clicked:
         "🖱️ Drag, zoom and explore the world map."
     )
 
-    # --------------------------------------------------------
+    # ========================================================
     # CREATE MAP
-    # --------------------------------------------------------
+    # ========================================================
 
     m = folium.Map(
         location=[
@@ -1193,9 +1139,9 @@ if analyze_clicked:
         world_copy_jump=False
     )
 
-    # --------------------------------------------------------
+    # ========================================================
     # STREET MAP
-    # --------------------------------------------------------
+    # ========================================================
 
     folium.TileLayer(
         tiles="OpenStreetMap",
@@ -1205,9 +1151,9 @@ if analyze_clicked:
         no_wrap=True
     ).add_to(m)
 
-    # --------------------------------------------------------
+    # ========================================================
     # SATELLITE MAP
-    # --------------------------------------------------------
+    # ========================================================
 
     folium.TileLayer(
         tiles=(
@@ -1222,9 +1168,9 @@ if analyze_clicked:
         no_wrap=True
     ).add_to(m)
 
-    # --------------------------------------------------------
+    # ========================================================
     # TERRAIN MAP
-    # --------------------------------------------------------
+    # ========================================================
 
     folium.TileLayer(
         tiles=(
@@ -1237,9 +1183,9 @@ if analyze_clicked:
         no_wrap=True
     ).add_to(m)
 
-    # --------------------------------------------------------
+    # ========================================================
     # MARKER COLOR
-    # --------------------------------------------------------
+    # ========================================================
 
     if risk_level == "LOW":
 
@@ -1257,9 +1203,9 @@ if analyze_clicked:
 
         marker_color = "darkred"
 
-    # --------------------------------------------------------
+    # ========================================================
     # POPUP LOCATION TEXT
-    # --------------------------------------------------------
+    # ========================================================
 
     if state:
 
@@ -1276,9 +1222,9 @@ if analyze_clicked:
             f"{country}"
         )
 
-    # --------------------------------------------------------
+    # ========================================================
     # POPUP
-    # --------------------------------------------------------
+    # ========================================================
 
     popup_html = f"""
     <div style="width:260px">
@@ -1300,9 +1246,9 @@ if analyze_clicked:
     </div>
     """
 
-    # --------------------------------------------------------
+    # ========================================================
     # LOCATION MARKER
-    # --------------------------------------------------------
+    # ========================================================
 
     folium.Marker(
         [
@@ -1323,9 +1269,9 @@ if analyze_clicked:
         )
     ).add_to(m)
 
-    # --------------------------------------------------------
+    # ========================================================
     # 5 KM MONITORING AREA
-    # --------------------------------------------------------
+    # ========================================================
 
     folium.Circle(
         location=[
@@ -1339,18 +1285,18 @@ if analyze_clicked:
         popup="5 km Monitoring Area"
     ).add_to(m)
 
-    # --------------------------------------------------------
+    # ========================================================
     # MAP MODE SWITCH
-    # --------------------------------------------------------
+    # ========================================================
 
     folium.LayerControl(
         position="topright",
         collapsed=False
     ).add_to(m)
 
-    # --------------------------------------------------------
+    # ========================================================
     # DISPLAY MAP
-    # --------------------------------------------------------
+    # ========================================================
 
     st_folium(
         m,
@@ -1359,9 +1305,9 @@ if analyze_clicked:
         returned_objects=[]
     )
 
-    # --------------------------------------------------------
+    # ========================================================
     # COORDINATES
-    # --------------------------------------------------------
+    # ========================================================
 
     st.caption(
         f"📍 Monitoring coordinates: "
