@@ -59,17 +59,16 @@ if "state" not in st.session_state:
 
 
 # ============================================================
-# LOCATION SEARCH
+# DYNAMIC WORLDWIDE LOCATION SEARCH
 # ============================================================
 
 def search_place(place):
 
     url = "https://geocoding-api.open-meteo.com/v1/search"
 
-    # First search exactly as entered
     params = {
-        "name": place,
-        "count": 10,
+        "name": place.strip(),
+        "count": 100,
         "language": "en",
         "format": "json"
     }
@@ -89,108 +88,172 @@ def search_place(place):
     if not results:
         return None
 
-    # --------------------------------------------------------
-    # Clean user input
-    # --------------------------------------------------------
-
-    search_text = place.strip().lower()
+    query = " ".join(
+        place.strip().lower().split()
+    )
 
     # --------------------------------------------------------
-    # If user explicitly mentions India,
-    # prefer Indian result
+    # CHECK IF USER EXPLICITLY GAVE A COUNTRY
+    # Example:
+    # Gujarat, India
+    # Paris, France
     # --------------------------------------------------------
 
-    india_keywords = [
-        "india",
-        "gujarat",
-        "himachal",
-        "himachal pradesh",
-        "uttar pradesh",
-        "rajasthan",
-        "kerala",
-        "tamil nadu",
-        "karnataka",
-        "andhra pradesh",
-        "telangana",
-        "maharashtra",
-        "odisha",
-        "punjab",
-        "haryana",
-        "bihar",
-        "assam",
-        "sikkim",
-        "uttarakhand",
-        "west bengal",
-        "madhya pradesh",
-        "chhattisgarh",
-        "jharkhand",
-        "goa",
-        "manipur",
-        "meghalaya",
-        "mizoram",
-        "nagaland",
-        "tripura",
-        "arunachal pradesh",
-        "jammu",
-        "kashmir",
-        "delhi"
+    query_parts = [
+        part.strip()
+        for part in query.split(",")
+        if part.strip()
     ]
 
-    india_result = None
+    requested_country = ""
 
-    # --------------------------------------------------------
-    # Check exact country code first
-    # --------------------------------------------------------
+    if len(query_parts) >= 2:
+        requested_country = query_parts[-1]
+
+    scored_results = []
 
     for item in results:
+
+        name = str(
+            item.get("name", "")
+        ).strip().lower()
+
+        country = str(
+            item.get("country", "")
+        ).strip().lower()
 
         country_code = str(
             item.get("country_code", "")
-        ).lower()
+        ).strip().lower()
 
-        country_name = str(
-            item.get("country", "")
-        ).lower()
+        admin1 = str(
+            item.get("admin1", "")
+        ).strip().lower()
 
-        if (
-            country_code == "in"
-            or country_name == "india"
-        ):
-            india_result = item
-            break
+        admin2 = str(
+            item.get("admin2", "")
+        ).strip().lower()
+
+        feature_code = str(
+            item.get("feature_code", "")
+        ).strip().upper()
+
+        population = item.get(
+            "population",
+            0
+        )
+
+        if population is None:
+            population = 0
+
+        try:
+            population = float(population)
+        except:
+            population = 0
+
+        score = 0
+
+        # ----------------------------------------------------
+        # CREATE SEARCHABLE TEXT
+        # ----------------------------------------------------
+
+        searchable_text = " ".join(
+            [
+                name,
+                admin1,
+                admin2,
+                country
+            ]
+        )
+
+        # ----------------------------------------------------
+        # EXACT NAME MATCH
+        # ----------------------------------------------------
+
+        if query == name:
+            score += 1000
+
+        # ----------------------------------------------------
+        # EXACT ADMINISTRATIVE REGION MATCH
+        # This helps for states such as
+        # Himachal Pradesh / Uttar Pradesh
+        # without hard-coding their names.
+        # ----------------------------------------------------
+
+        if query == admin1:
+            score += 1200
+
+        if query == admin2:
+            score += 1100
+
+        # ----------------------------------------------------
+        # QUERY FOUND IN LOCATION INFORMATION
+        # ----------------------------------------------------
+
+        if query in searchable_text:
+            score += 300
+
+        # ----------------------------------------------------
+        # ADMINISTRATIVE REGION
+        # Prefer state/province/region results when the
+        # user's query matches an administrative area.
+        # ----------------------------------------------------
+
+        if feature_code == "ADM1":
+            score += 500
+
+        elif feature_code == "ADM2":
+            score += 350
+
+        elif feature_code == "ADM3":
+            score += 200
+
+        # ----------------------------------------------------
+        # EXPLICIT COUNTRY MATCH
+        # ----------------------------------------------------
+
+        if requested_country:
+
+            if (
+                requested_country == country
+                or requested_country == country_code
+            ):
+                score += 1500
+
+            else:
+                score -= 1000
+
+        # ----------------------------------------------------
+        # POPULATION AS A TIE BREAKER
+        # ----------------------------------------------------
+
+        if population > 0:
+
+            score += min(
+                math.log10(population + 1) * 20,
+                200
+            )
+
+        scored_results.append(
+            (
+                score,
+                item
+            )
+        )
 
     # --------------------------------------------------------
-    # If search strongly looks Indian,
-    # use Indian result whenever available
+    # SORT BEST MATCH FIRST
     # --------------------------------------------------------
 
-    if any(
-        keyword in search_text
-        for keyword in india_keywords
-    ):
+    scored_results.sort(
+        key=lambda x: x[0],
+        reverse=True
+    )
 
-        if india_result is not None:
-            return india_result
+    if not scored_results:
+        return None
 
-    # --------------------------------------------------------
-    # Otherwise choose best result
-    # --------------------------------------------------------
-
-    # Exact name match
-    for item in results:
-
-        item_name = str(
-            item.get("name", "")
-        ).lower()
-
-        if item_name == search_text:
-            return item
-
-    # Prefer India if available
-    if india_result is not None:
-        return india_result
-
-    return results[0]
+    return scored_results[0][1]
 
 
 # ============================================================
@@ -225,9 +288,11 @@ def get_environmental_data(latitude, longitude):
 
     result = response.json()
 
-    current = result.get("current", {})
+    current = result.get(
+        "current",
+        {}
+    )
 
-    # Temperature
     temperature = current.get(
         "temperature_2m"
     )
@@ -235,7 +300,6 @@ def get_environmental_data(latitude, longitude):
     if temperature is None:
         temperature = 0.0
 
-    # Humidity
     humidity = current.get(
         "relative_humidity_2m"
     )
@@ -243,7 +307,6 @@ def get_environmental_data(latitude, longitude):
     if humidity is None:
         humidity = 0.0
 
-    # Soil Moisture
     soil_moisture_raw = current.get(
         "soil_moisture_0_to_7cm"
     )
@@ -253,13 +316,17 @@ def get_environmental_data(latitude, longitude):
         if "Soil_Moisture_Content" in data.columns:
 
             soil_moisture = float(
-                data["Soil_Moisture_Content"].mean()
+                data[
+                    "Soil_Moisture_Content"
+                ].mean()
             )
 
         elif "Soil_Saturation" in data.columns:
 
             soil_moisture = float(
-                data["Soil_Saturation"].mean()
+                data[
+                    "Soil_Saturation"
+                ].mean()
             )
 
         else:
@@ -272,9 +339,9 @@ def get_environmental_data(latitude, longitude):
             float(soil_moisture_raw) * 100
         )
 
-    # Rainfall
     precipitation = (
-        result.get("hourly", {})
+        result
+        .get("hourly", {})
         .get("precipitation", [])
     )
 
@@ -317,7 +384,9 @@ def get_elevation(latitude, longitude):
 
     result = response.json()
 
-    elevation = result.get("elevation")
+    elevation = result.get(
+        "elevation"
+    )
 
     if not elevation:
         return 0.0
@@ -425,8 +494,8 @@ with col1:
     place = st.text_input(
         "🔎 Search any place in the world",
         placeholder=(
-            "Example: Gujarat, Himachal Pradesh, "
-            "Uttar Pradesh, Nepal, Tokyo..."
+            "Example: Himachal Pradesh, "
+            "Gujarat, Uttar Pradesh, Nepal, Tokyo..."
         )
     )
 
@@ -700,10 +769,6 @@ analyze_clicked = st.button(
 
 if analyze_clicked:
 
-    # --------------------------------------------------------
-    # MODEL INPUT
-    # --------------------------------------------------------
-
     input_data = (
         data[features]
         .mean()
@@ -711,16 +776,17 @@ if analyze_clicked:
         .T
     )
 
-
     if "Rainfall_mm" in input_data.columns:
 
-        input_data["Rainfall_mm"] = rainfall
-
+        input_data[
+            "Rainfall_mm"
+        ] = rainfall
 
     if "Slope_Angle" in input_data.columns:
 
-        input_data["Slope_Angle"] = slope
-
+        input_data[
+            "Slope_Angle"
+        ] = slope
 
     if "Soil_Moisture_Content" in input_data.columns:
 
@@ -728,13 +794,11 @@ if analyze_clicked:
             "Soil_Moisture_Content"
         ] = soil_moisture
 
-
     if "Soil_Saturation" in input_data.columns:
 
         input_data[
             "Soil_Saturation"
         ] = soil_moisture
-
 
     if "Humidity_percent" in input_data.columns:
 
@@ -742,13 +806,11 @@ if analyze_clicked:
             "Humidity_percent"
         ] = humidity
 
-
     if "Temperature_C" in input_data.columns:
 
         input_data[
             "Temperature_C"
         ] = temperature
-
 
     # --------------------------------------------------------
     # AI PREDICTION
@@ -774,12 +836,10 @@ if analyze_clicked:
 
         st.stop()
 
-
     probability = max(
         0.0,
         min(100.0, probability)
     )
-
 
     # --------------------------------------------------------
     # RISK LEVEL
@@ -821,7 +881,6 @@ if analyze_clicked:
             f"{probability:.1f}%"
         )
 
-
     # --------------------------------------------------------
     # RISK METRICS
     # --------------------------------------------------------
@@ -849,7 +908,6 @@ if analyze_clicked:
             f"{rainfall:.1f} mm"
         )
 
-
     # --------------------------------------------------------
     # AI ASSESSMENT
     # --------------------------------------------------------
@@ -873,7 +931,6 @@ if analyze_clicked:
             "under the current environmental conditions."
         )
 
-
     # --------------------------------------------------------
     # RISK EXPLANATION
     # --------------------------------------------------------
@@ -883,7 +940,6 @@ if analyze_clicked:
     )
 
     reasons = []
-
 
     if rainfall > 150:
 
@@ -897,7 +953,6 @@ if analyze_clicked:
             "🌧️ Significant rainfall detected."
         )
 
-
     if slope > 35:
 
         reasons.append(
@@ -910,20 +965,17 @@ if analyze_clicked:
             "⛰️ Moderately steep terrain detected."
         )
 
-
     if soil_moisture > 70:
 
         reasons.append(
             "💧 High soil moisture detected."
         )
 
-
     if humidity > 80:
 
         reasons.append(
             "💦 High humidity detected."
         )
-
 
     if reasons:
 
@@ -938,7 +990,6 @@ if analyze_clicked:
             "factor crossed the configured "
             "warning threshold."
         )
-
 
     # --------------------------------------------------------
     # EARLY WARNING
@@ -955,7 +1006,6 @@ if analyze_clicked:
             "Further monitoring is recommended."
         )
 
-
     # ========================================================
     # INTERACTIVE MAP
     # ========================================================
@@ -969,7 +1019,6 @@ if analyze_clicked:
     st.write(
         "🖱️ Drag, zoom and explore the world map."
     )
-
 
     # --------------------------------------------------------
     # CREATE MAP
@@ -988,7 +1037,6 @@ if analyze_clicked:
         world_copy_jump=False
     )
 
-
     # --------------------------------------------------------
     # STREET MAP
     # --------------------------------------------------------
@@ -1000,7 +1048,6 @@ if analyze_clicked:
         control=True,
         no_wrap=True
     ).add_to(m)
-
 
     # --------------------------------------------------------
     # SATELLITE MAP
@@ -1019,7 +1066,6 @@ if analyze_clicked:
         no_wrap=True
     ).add_to(m)
 
-
     # --------------------------------------------------------
     # TERRAIN MAP
     # --------------------------------------------------------
@@ -1034,7 +1080,6 @@ if analyze_clicked:
         control=True,
         no_wrap=True
     ).add_to(m)
-
 
     # --------------------------------------------------------
     # MARKER COLOR
@@ -1056,7 +1101,6 @@ if analyze_clicked:
 
         marker_color = "darkred"
 
-
     # --------------------------------------------------------
     # POPUP LOCATION TEXT
     # --------------------------------------------------------
@@ -1075,7 +1119,6 @@ if analyze_clicked:
             f"{location_name}, "
             f"{country}"
         )
-
 
     # --------------------------------------------------------
     # POPUP
@@ -1101,7 +1144,6 @@ if analyze_clicked:
     </div>
     """
 
-
     # --------------------------------------------------------
     # LOCATION MARKER
     # --------------------------------------------------------
@@ -1125,7 +1167,6 @@ if analyze_clicked:
         )
     ).add_to(m)
 
-
     # --------------------------------------------------------
     # 5 KM MONITORING AREA
     # --------------------------------------------------------
@@ -1142,7 +1183,6 @@ if analyze_clicked:
         popup="5 km Monitoring Area"
     ).add_to(m)
 
-
     # --------------------------------------------------------
     # MAP MODE SWITCH
     # --------------------------------------------------------
@@ -1151,7 +1191,6 @@ if analyze_clicked:
         position="topright",
         collapsed=False
     ).add_to(m)
-
 
     # --------------------------------------------------------
     # DISPLAY MAP
@@ -1163,7 +1202,6 @@ if analyze_clicked:
         height=600,
         returned_objects=[]
     )
-
 
     # --------------------------------------------------------
     # COORDINATES
