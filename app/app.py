@@ -19,7 +19,7 @@ st.set_page_config(
 
 
 # ============================================================
-# LOAD MODEL AND DATASET
+# LOAD MODEL + DATASET
 # ============================================================
 
 @st.cache_resource
@@ -54,6 +54,9 @@ if "location_name" not in st.session_state:
 if "country" not in st.session_state:
     st.session_state.country = "India"
 
+if "state" not in st.session_state:
+    st.session_state.state = ""
+
 
 # ============================================================
 # LOCATION SEARCH
@@ -63,9 +66,10 @@ def search_place(place):
 
     url = "https://geocoding-api.open-meteo.com/v1/search"
 
+    # First search exactly as entered
     params = {
         "name": place,
-        "count": 1,
+        "count": 10,
         "language": "en",
         "format": "json"
     }
@@ -73,17 +77,120 @@ def search_place(place):
     response = requests.get(
         url,
         params=params,
-        timeout=10
+        timeout=15
     )
 
     response.raise_for_status()
 
     result = response.json()
 
-    if "results" not in result:
+    results = result.get("results", [])
+
+    if not results:
         return None
 
-    return result["results"][0]
+    # --------------------------------------------------------
+    # Clean user input
+    # --------------------------------------------------------
+
+    search_text = place.strip().lower()
+
+    # --------------------------------------------------------
+    # If user explicitly mentions India,
+    # prefer Indian result
+    # --------------------------------------------------------
+
+    india_keywords = [
+        "india",
+        "gujarat",
+        "himachal",
+        "himachal pradesh",
+        "uttar pradesh",
+        "rajasthan",
+        "kerala",
+        "tamil nadu",
+        "karnataka",
+        "andhra pradesh",
+        "telangana",
+        "maharashtra",
+        "odisha",
+        "punjab",
+        "haryana",
+        "bihar",
+        "assam",
+        "sikkim",
+        "uttarakhand",
+        "west bengal",
+        "madhya pradesh",
+        "chhattisgarh",
+        "jharkhand",
+        "goa",
+        "manipur",
+        "meghalaya",
+        "mizoram",
+        "nagaland",
+        "tripura",
+        "arunachal pradesh",
+        "jammu",
+        "kashmir",
+        "delhi"
+    ]
+
+    india_result = None
+
+    # --------------------------------------------------------
+    # Check exact country code first
+    # --------------------------------------------------------
+
+    for item in results:
+
+        country_code = str(
+            item.get("country_code", "")
+        ).lower()
+
+        country_name = str(
+            item.get("country", "")
+        ).lower()
+
+        if (
+            country_code == "in"
+            or country_name == "india"
+        ):
+            india_result = item
+            break
+
+    # --------------------------------------------------------
+    # If search strongly looks Indian,
+    # use Indian result whenever available
+    # --------------------------------------------------------
+
+    if any(
+        keyword in search_text
+        for keyword in india_keywords
+    ):
+
+        if india_result is not None:
+            return india_result
+
+    # --------------------------------------------------------
+    # Otherwise choose best result
+    # --------------------------------------------------------
+
+    # Exact name match
+    for item in results:
+
+        item_name = str(
+            item.get("name", "")
+        ).lower()
+
+        if item_name == search_text:
+            return item
+
+    # Prefer India if available
+    if india_result is not None:
+        return india_result
+
+    return results[0]
 
 
 # ============================================================
@@ -118,13 +225,17 @@ def get_environmental_data(latitude, longitude):
 
     result = response.json()
 
-    current = result["current"]
+    current = result.get("current", {})
 
-    temperature = current.get("temperature_2m")
+    # Temperature
+    temperature = current.get(
+        "temperature_2m"
+    )
 
     if temperature is None:
         temperature = 0.0
 
+    # Humidity
     humidity = current.get(
         "relative_humidity_2m"
     )
@@ -132,6 +243,7 @@ def get_environmental_data(latitude, longitude):
     if humidity is None:
         humidity = 0.0
 
+    # Soil Moisture
     soil_moisture_raw = current.get(
         "soil_moisture_0_to_7cm"
     )
@@ -160,6 +272,7 @@ def get_environmental_data(latitude, longitude):
             float(soil_moisture_raw) * 100
         )
 
+    # Rainfall
     precipitation = (
         result.get("hourly", {})
         .get("precipitation", [])
@@ -213,7 +326,7 @@ def get_elevation(latitude, longitude):
 
 
 # ============================================================
-# SLOPE CALCULATION
+# SLOPE
 # ============================================================
 
 def calculate_slope(latitude, longitude):
@@ -298,7 +411,7 @@ st.divider()
 
 
 # ============================================================
-# WORLDWIDE LOCATION SEARCH
+# LOCATION SEARCH UI
 # ============================================================
 
 st.header(
@@ -312,7 +425,8 @@ with col1:
     place = st.text_input(
         "🔎 Search any place in the world",
         placeholder=(
-            "Example: Shillong, Tokyo, Nepal, California..."
+            "Example: Gujarat, Himachal Pradesh, "
+            "Uttar Pradesh, Nepal, Tokyo..."
         )
     )
 
@@ -327,7 +441,7 @@ with col2:
 
 
 # ============================================================
-# SEARCH
+# SEARCH ACTION
 # ============================================================
 
 if search_clicked:
@@ -363,14 +477,25 @@ if search_clicked:
                     result["longitude"]
                 )
 
-                st.session_state.location_name = result.get(
-                    "name",
-                    place
+                st.session_state.location_name = (
+                    result.get(
+                        "name",
+                        place
+                    )
                 )
 
-                st.session_state.country = result.get(
-                    "country",
-                    ""
+                st.session_state.country = (
+                    result.get(
+                        "country",
+                        ""
+                    )
+                )
+
+                st.session_state.state = (
+                    result.get(
+                        "admin1",
+                        ""
+                    )
                 )
 
                 st.success(
@@ -393,12 +518,23 @@ longitude = st.session_state.longitude
 
 location_name = st.session_state.location_name
 country = st.session_state.country
+state = st.session_state.state
 
 
-st.write(
-    f"📍 Selected Location: "
-    f"**{location_name}, {country}**"
-)
+if state:
+
+    st.write(
+        f"📍 Selected Location: "
+        f"**{location_name}, {state}, {country}**"
+    )
+
+else:
+
+    st.write(
+        f"📍 Selected Location: "
+        f"**{location_name}, {country}**"
+    )
+
 
 st.write(
     f"🌐 Coordinates: "
@@ -407,7 +543,7 @@ st.write(
 
 
 # ============================================================
-# LIVE ENVIRONMENT
+# GET LIVE ENVIRONMENT
 # ============================================================
 
 try:
@@ -418,9 +554,16 @@ try:
     )
 
     rainfall = environment["rainfall"]
-    soil_moisture = environment["soil_moisture"]
+
+    soil_moisture = environment[
+        "soil_moisture"
+    ]
+
     humidity = environment["humidity"]
-    temperature = environment["temperature"]
+
+    temperature = environment[
+        "temperature"
+    ]
 
 except Exception as e:
 
@@ -456,7 +599,7 @@ except Exception:
 
 
 # ============================================================
-# LIVE DATA
+# LIVE ENVIRONMENTAL DATA
 # ============================================================
 
 st.subheader(
@@ -497,11 +640,6 @@ with col4:
 st.write(
     f"⛰️ Terrain Slope: "
     f"**{slope:.1f}°**"
-)
-
-st.caption(
-    "ℹ️ Environmental conditions are automatically "
-    "retrieved based on the selected monitoring location."
 )
 
 st.divider()
@@ -551,13 +689,16 @@ st.divider()
 
 
 # ============================================================
-# ANALYZE
+# ANALYZE LANDSLIDE RISK
 # ============================================================
 
-if st.button(
+analyze_clicked = st.button(
     "🔍 ANALYZE LANDSLIDE RISK",
     use_container_width=True
-):
+)
+
+
+if analyze_clicked:
 
     # --------------------------------------------------------
     # MODEL INPUT
@@ -610,7 +751,7 @@ if st.button(
 
 
     # --------------------------------------------------------
-    # PREDICTION
+    # AI PREDICTION
     # --------------------------------------------------------
 
     try:
@@ -697,7 +838,7 @@ if st.button(
     with col2:
 
         st.metric(
-            "Slope",
+            "Terrain Slope",
             f"{slope:.1f}°"
         )
 
@@ -760,7 +901,7 @@ if st.button(
     if slope > 35:
 
         reasons.append(
-            "⛰️ High slope angle detected."
+            "⛰️ High terrain slope detected."
         )
 
     elif slope > 20:
@@ -793,8 +934,9 @@ if st.button(
     else:
 
         st.write(
-            "✅ Current environmental conditions "
-            "are within relatively safer ranges."
+            "✅ No individual environmental "
+            "factor crossed the configured "
+            "warning threshold."
         )
 
 
@@ -861,7 +1003,7 @@ if st.button(
 
 
     # --------------------------------------------------------
-    # SATELLITE
+    # SATELLITE MAP
     # --------------------------------------------------------
 
     folium.TileLayer(
@@ -879,7 +1021,7 @@ if st.button(
 
 
     # --------------------------------------------------------
-    # TERRAIN
+    # TERRAIN MAP
     # --------------------------------------------------------
 
     folium.TileLayer(
@@ -916,15 +1058,33 @@ if st.button(
 
 
     # --------------------------------------------------------
+    # POPUP LOCATION TEXT
+    # --------------------------------------------------------
+
+    if state:
+
+        popup_location = (
+            f"{location_name}, "
+            f"{state}, "
+            f"{country}"
+        )
+
+    else:
+
+        popup_location = (
+            f"{location_name}, "
+            f"{country}"
+        )
+
+
+    # --------------------------------------------------------
     # POPUP
     # --------------------------------------------------------
 
     popup_html = f"""
     <div style="width:260px">
 
-        <h4>📍 {location_name}</h4>
-
-        <b>Country:</b> {country}<br><br>
+        <h4>📍 {popup_location}</h4>
 
         🌐 <b>Latitude:</b> {latitude:.4f}<br>
         🌐 <b>Longitude:</b> {longitude:.4f}<br><br>
@@ -943,7 +1103,7 @@ if st.button(
 
 
     # --------------------------------------------------------
-    # MARKER
+    # LOCATION MARKER
     # --------------------------------------------------------
 
     folium.Marker(
@@ -967,7 +1127,7 @@ if st.button(
 
 
     # --------------------------------------------------------
-    # MONITORING AREA
+    # 5 KM MONITORING AREA
     # --------------------------------------------------------
 
     folium.Circle(
@@ -984,7 +1144,7 @@ if st.button(
 
 
     # --------------------------------------------------------
-    # MAP LAYER SWITCH
+    # MAP MODE SWITCH
     # --------------------------------------------------------
 
     folium.LayerControl(
@@ -1006,7 +1166,7 @@ if st.button(
 
 
     # --------------------------------------------------------
-    # CAPTION
+    # COORDINATES
     # --------------------------------------------------------
 
     st.caption(
