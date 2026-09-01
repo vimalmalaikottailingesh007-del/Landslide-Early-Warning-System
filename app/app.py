@@ -64,34 +64,190 @@ if "state" not in st.session_state:
 
 def search_place(place):
 
+    place = place.strip()
+
+    if not place:
+        return None
+
+    # ========================================================
+    # 1. OPEN-METEO DIRECT SEARCH
+    # ========================================================
+
     url = "https://geocoding-api.open-meteo.com/v1/search"
 
     params = {
-        "name": place.strip(),
+        "name": place,
         "count": 100,
         "language": "en",
         "format": "json"
     }
 
-    response = requests.get(
-        url,
-        params=params,
-        timeout=15
+    try:
+
+        response = requests.get(
+            url,
+            params=params,
+            timeout=15
+        )
+
+        response.raise_for_status()
+
+        data_result = response.json()
+
+        results = data_result.get(
+            "results",
+            []
+        )
+
+        if results:
+
+            query = place.lower().strip()
+
+            # Exact name match
+            for item in results:
+
+                name = str(
+                    item.get("name", "")
+                ).lower().strip()
+
+                if name == query:
+
+                    return item
+
+            # Exact admin1 match
+            for item in results:
+
+                admin1 = str(
+                    item.get("admin1", "")
+                ).lower().strip()
+
+                if admin1 == query:
+
+                    return item
+
+            # Exact admin2 match
+            for item in results:
+
+                admin2 = str(
+                    item.get("admin2", "")
+                ).lower().strip()
+
+                if admin2 == query:
+
+                    return item
+
+            # Prefer administrative result
+            for item in results:
+
+                feature = str(
+                    item.get(
+                        "feature_code",
+                        ""
+                    )
+                ).upper()
+
+                if feature in [
+                    "ADM1",
+                    "ADM2"
+                ]:
+
+                    return item
+
+            return results[0]
+
+    except Exception:
+        pass
+
+
+    # ========================================================
+    # 2. NOMINATIM FALLBACK
+    # ========================================================
+    # This handles locations that Open-Meteo does not return.
+    # No places are hard-coded.
+    # ========================================================
+
+    nominatim_url = (
+        "https://nominatim.openstreetmap.org/search"
     )
 
-    response.raise_for_status()
+    nominatim_params = {
+        "q": place,
+        "format": "jsonv2",
+        "limit": 10,
+        "addressdetails": 1
+    }
 
-    result = response.json()
+    headers = {
+        "User-Agent":
+        "Landslide-Early-Warning-System/1.0"
+    }
 
-    results = result.get("results", [])
+    try:
 
-    if not results:
+        response = requests.get(
+            nominatim_url,
+            params=nominatim_params,
+            headers=headers,
+            timeout=15
+        )
+
+        response.raise_for_status()
+
+        results = response.json()
+
+        if not results:
+            return None
+
+        best = results[0]
+
+        address = best.get(
+            "address",
+            {}
+        )
+
+        return {
+            "name": (
+                address.get(
+                    "state"
+                )
+                or address.get(
+                    "city"
+                )
+                or address.get(
+                    "town"
+                )
+                or address.get(
+                    "village"
+                )
+                or place
+            ),
+
+            "latitude": float(
+                best["lat"]
+            ),
+
+            "longitude": float(
+                best["lon"]
+            ),
+
+            "country": address.get(
+                "country",
+                ""
+            ),
+
+            "admin1": address.get(
+                "state",
+                ""
+            ),
+
+            "country_code": address.get(
+                "country_code",
+                ""
+            ).upper()
+        }
+
+    except Exception:
         return None
-
-    query = " ".join(
-        place.strip().lower().split()
-    )
-
     # --------------------------------------------------------
     # CHECK IF USER EXPLICITLY GAVE A COUNTRY
     # Example:
